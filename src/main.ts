@@ -13,6 +13,8 @@ import { pickBootTier, TierMonitor } from './render/tiers';
 import { GltfHandRig, type HandRig } from './render/hands';
 import { loadObjects, makeRpsObjectRig } from './render/objects';
 import { computeRigScale } from './render/framing';
+import { NullOccluder, type OpponentObject } from './render/occluder';
+import { RevealController } from './render/reveal';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
 import { RevealPop } from './render/reveal-pop';
@@ -185,6 +187,25 @@ async function boot(): Promise<void> {
   // onRigLoaded once f1 (#23) provides the throwable/opponent object (null-safe until then).
   const revealPop = new RevealPop(null);
 
+  // f3 [#25] — hidden-CPU board/reveal sequencing. The RevealController is a pure downstream
+  // consumer of machine.onChange (like render + juice); it hides the opponent object until the
+  // reveal beat, then shows the ALREADY-committed pick (F1-first — never gates the result).
+  // Until f1 (#23) lands the real OpponentObject render path, wire a NullOccluder (always-shown,
+  // no-op) + a stub opponent — the opponent stays text-only via the unchanged render(s), so f3 is
+  // non-regressive. The ONLY f1-gated line is the T7 swap in onRigLoaded below.
+  const opponentStub: OpponentObject = { setVisible: () => {}, setShape: () => {} };
+  const occluder = new NullOccluder();
+  const reveal = new RevealController({
+    occluder,
+    opponent: opponentStub,
+    instant: () =>
+      shouldTweenOnly({
+        reducedMotion: reduced,
+        tier: monitor.getTier(),
+        physicsReady: !!physics,
+      }),
+  });
+
   // Hands (primitive baseline; GLTF upgrade if a licensed asset is present).
   // card-rps3d-fix [R6.4] — the load->add->scale->frame + input wiring is delegated to wireGame so
   // it is testable headlessly; boot() supplies the real deps.
@@ -209,6 +230,11 @@ async function boot(): Promise<void> {
     applyScale: (object, scale) => (object as THREE.Object3D).scale.setScalar(scale),
     onRigLoaded: (rig) => {
       hands = rig as unknown as HandRig;
+      // f3 [#25] T7 (f1-gated, SEQUENCED after #23): once f1 lands its OpponentObject render path
+      // + throwable-object rig, swap the NullOccluder + opponentStub above for a BoardOccluder
+      // (positioned in front of the opponent object) + f1's real OpponentObject, passing both into
+      // the RevealController. No logic change to reveal.ts — only this boot-time handle swap. Until
+      // then NullOccluder + stub keep f3 non-regressive (opponent stays text-only via render(s)).
       // CC-BY-4.0 attribution (only when a licensed GLTF is actually in use; provenance in
       // public/assets/hands/LICENSE.md). With the R1 hand-plausibility gate, RiggedSimple is
       // rejected and the primitive ships, so this credit correctly does not render.
@@ -238,6 +264,9 @@ async function boot(): Promise<void> {
 
   machine.onChange((s: RoundState) => {
     render(s);
+    // f3 [#25] — cosmetic reveal choreography AFTER render (a11y-authoritative status fires first).
+    // Downstream consumer only: reads committed state, never gates the result (F1-first).
+    reveal.onState(s);
     if (s.phase === 'resolved' && s.result) {
       poseT = 0;
       // card-rps3d-objects · f1 (#23) [R2, FORK D4, NFR1] — drive the opponent object off the
@@ -291,7 +320,7 @@ async function boot(): Promise<void> {
     if (hands && st.playerShape) hands.setShape(st.playerShape, poseT * 0.2);
     if (physics) physics.step(dt);
     juice.update(dt / 1000);
-    revealPop.update(dt); // [f2] #24 — dt is ms here (frame() uses ms deltas)
+    reveal.update(dt / 1000); // f3 [#25] — same cosmetic timing channel as juice (seconds d
     post.render();
     requestAnimationFrame(frame);
   }
