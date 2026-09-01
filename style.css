@@ -90,6 +90,18 @@ kbd {
   white-space: pre;
 }
 
+.asset-credit {
+  position: absolute;
+  bottom: .5rem;
+  right: .75rem;
+  z-index: 3;
+  font-size: .72rem;
+  opacity: .65;
+  color: var(--fg);
+  pointer-events: auto;
+}
+.asset-credit a { color: var(--accent); }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
