@@ -14,6 +14,7 @@ import { loadHands, GltfHandRig, type HandRig } from './render/hands';
 import { computeRigScale } from './render/framing';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
+import { RevealPop } from './render/reveal-pop';
 import { prefersReducedMotion, shouldTweenOnly } from './a11y/motion';
 import { createFallback } from './a11y/fallback';
 
@@ -136,6 +137,9 @@ async function boot(): Promise<void> {
 
   const reduced = prefersReducedMotion();
   const juice = new Juice(scene3d.camera);
+  // [f2] #24 — poppy reveal pop. Cosmetic consumer of the committed result; target set in
+  // onRigLoaded once f1 (#23) provides the throwable/opponent object (null-safe until then).
+  const revealPop = new RevealPop(null);
 
   // Hands (primitive baseline; GLTF upgrade if a licensed asset is present).
   // card-rps3d-fix [R6.4] — the load->add->scale->frame + input wiring is delegated to wireGame so
@@ -189,6 +193,11 @@ async function boot(): Promise<void> {
       });
       // Cosmetic, fire-and-forget — cannot alter the committed result.
       juice.onResult(s.result, { tweenOnly, physics });
+      // [f2] #24 — pop the thrown object on the SAME resolved beat (fire-and-forget, F1-first).
+      revealPop.onResult({ tweenOnly });
+    } else if (s.phase === 'capturing') {
+      // [f2] #24 — re-arm the reveal pop for a fresh round (mirrors machine.begin()).
+      revealPop.reset();
     }
   });
 
@@ -224,6 +233,7 @@ async function boot(): Promise<void> {
     if (hands && st.playerShape) hands.setShape(st.playerShape, poseT * 0.2);
     if (physics) physics.step(dt);
     juice.update(dt / 1000);
+    revealPop.update(dt); // [f2] #24 — dt is ms here (frame() uses ms deltas)
     post.render();
     requestAnimationFrame(frame);
   }
