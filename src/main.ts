@@ -10,12 +10,14 @@ import { RoundMachine, type RoundState } from './round/machine';
 import { createScene } from './render/scene';
 import { createPost } from './render/post';
 import { pickBootTier, TierMonitor } from './render/tiers';
-import { loadHands, GltfHandRig, type HandRig } from './render/hands';
+import { GltfHandRig, type HandRig } from './render/hands';
+import { loadObjects, makeRpsObjectRig } from './render/objects';
 import { computeRigScale } from './render/framing';
 import { NullOccluder, type OpponentObject } from './render/occluder';
 import { RevealController } from './render/reveal';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
+import { RevealPop } from './render/reveal-pop';
 import { prefersReducedMotion, shouldTweenOnly } from './a11y/motion';
 import { createFallback } from './a11y/fallback';
 
@@ -138,6 +140,9 @@ async function boot(): Promise<void> {
 
   const reduced = prefersReducedMotion();
   const juice = new Juice(scene3d.camera);
+  // [f2] #24 — poppy reveal pop. Cosmetic consumer of the committed result; target set in
+  // onRigLoaded once f1 (#23) provides the throwable/opponent object (null-safe until then).
+  const revealPop = new RevealPop(null);
 
   // f3 [#25] — hidden-CPU board/reveal sequencing. The RevealController is a pure downstream
   // consumer of machine.onChange (like render + juice); it hides the opponent object until the
@@ -168,7 +173,7 @@ async function boot(): Promise<void> {
 
   wireGame({
     scene: scene3d as unknown as WireScene,
-    loadHands: () => loadHands(bootTier) as Promise<WireRig>,
+    loadHands: () => loadObjects(bootTier) as Promise<WireRig>,
     engine,
     // wireGame owns the ONE submit sink; construct + mount the a11y fallback against it so both
     // input paths (gesture engine + keyboard/buttons) feed the same machine.submit — single source
@@ -201,6 +206,16 @@ async function boot(): Promise<void> {
     },
   });
 
+  // card-rps3d-objects · f1 (#23) [R2, FORK D3] — NEW opponent-object render path. The opponent was
+  // text-only in render(); now its committed shape renders as its own object entity, distinct from
+  // the player object and set back across the "table". Built by the SAME factory (shared visual
+  // language, R3). It does NOT participate in wireGame's computeRigScale/frameObject (keeps the
+  // single-object framing intact, R4/NFR2). Its meshes start invisible until a shape is set — the
+  // same seam f3's board later hides.
+  const opponent = makeRpsObjectRig();
+  opponent.object.position.set(0, 0, -3);
+  scene3d.scene.add(opponent.object);
+
   // --- The authoritative core: round machine + its ONE input event ---
   let poseT = 0;
 
@@ -211,6 +226,10 @@ async function boot(): Promise<void> {
     reveal.onState(s);
     if (s.phase === 'resolved' && s.result) {
       poseT = 0;
+      // card-rps3d-objects · f1 (#23) [R2, FORK D4, NFR1] — drive the opponent object off the
+      // ALREADY-COMMITTED opponentShape, inside this committed-result consumer (never at pick time;
+      // pickOpponent() stays solely in RoundMachine.submit()).
+      if (s.opponentShape) opponent.setShape(s.opponentShape, 1);
       const tweenOnly = shouldTweenOnly({
         reducedMotion: reduced,
         tier: monitor.getTier(),
@@ -218,6 +237,11 @@ async function boot(): Promise<void> {
       });
       // Cosmetic, fire-and-forget — cannot alter the committed result.
       juice.onResult(s.result, { tweenOnly, physics });
+      // [f2] #24 — pop the thrown object on the SAME resolved beat (fire-and-forget, F1-first).
+      revealPop.onResult({ tweenOnly });
+    } else if (s.phase === 'capturing') {
+      // [f2] #24 — re-arm the reveal pop for a fresh round (mirrors machine.begin()).
+      revealPop.reset();
     }
   });
 
@@ -253,7 +277,7 @@ async function boot(): Promise<void> {
     if (hands && st.playerShape) hands.setShape(st.playerShape, poseT * 0.2);
     if (physics) physics.step(dt);
     juice.update(dt / 1000);
-    reveal.update(dt / 1000); // f3 [#25] — same cosmetic timing channel as juice (seconds delta)
+    reveal.update(dt / 1000); // f3 [#25] — same cosmetic timing channel as juice (seconds d
     post.render();
     requestAnimationFrame(frame);
   }
