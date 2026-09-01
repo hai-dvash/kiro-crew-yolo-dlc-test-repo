@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { segment, DEFAULT_CAPTURE } from '../src/gesture/capture';
 import { extract } from '../src/gesture/features';
-import { classify } from '../src/gesture/classifier';
+import { classify, LOW_CONFIDENCE_THRESHOLD } from '../src/gesture/classifier';
+import { FIXTURES } from '../src/gesture/fixtures';
 import type { Sample } from '../src/types';
 
 // Build a stream from (dx,dy) steps at fixed dt.
@@ -88,5 +89,60 @@ describe('classifier.classify — margin confidence (T5, R1.2)', () => {
     // near-45° single motion: no clear axis dominance, no reversals -> top1-top2 margin tiny.
     const c = classify(extract(stream([[15, 12]])));
     expect(c.lowConfidence).toBe(true);
+  });
+});
+
+// card-rps3d-fix [R6.3, design §5/§6] — mouse-flick confidence repair. The bug ("Low confidence
+// 17% — throw again" on genuine flicks) was the conservative margin denominator (top+runnerUp)
+// compressing real throws below LOW_CONFIDENCE_THRESHOLD. Lever 2 rescales the denominator to
+// (top+EPS) — a MONOTONIC transform of the same (top-runnerUp) gap, so it lifts confidence without
+// ever reordering shapes. These tests prove: (a) genuine scissors throws that WERE low-confidence
+// under the old formula clear the threshold under the fix (RED-on-old crossover); (b) the rescale
+// is monotonic (new >= old) on the whole corpus; (c) which shape wins is unchanged (scoring-intent
+// invariance — the R4 behavior-preserving constraint).
+describe('classifier confidence repair (card-rps3d-fix, R4/R6.3)', () => {
+  // Faithful reconstruction of the OLD (719c6eb) confidence formula: (top-runnerUp)/(top+runnerUp+EPS).
+  const EPS = 1e-6;
+  function oldConfidence(scores: Record<string, number>): number {
+    const e = (Object.entries(scores) as [string, number][]).sort((a, b) => b[1] - a[1]);
+    const top = e[0][1];
+    const run = e[1][1];
+    return Math.max(0, Math.min(1, (top - run) / (top + run + EPS)));
+  }
+
+  // Genuine scissors flicks with a moderate vertical lean (the committed `scissorsVertical`
+  // fixtures): a real snip that the old denominator scored at ~0.14 (LOW) — the "throw again" case.
+  const verticalSnip = (scale: number): Sample[] =>
+    stream([
+      [28 * scale, 9 * scale], [-16 * scale, 10 * scale], [27 * scale, 9 * scale],
+      [-15 * scale, 10 * scale], [26 * scale, 9 * scale], [-14 * scale, 10 * scale],
+    ]);
+
+  it('genuine scissors flicks clear the threshold under the fix but were LOW under the old formula (RED-on-old)', () => {
+    for (const scale of [0.8, 1, 1.25, 1.5]) {
+      const c = classify(extract(verticalSnip(scale)));
+      // Fix: correctly classified scissors, ABOVE the low-confidence threshold.
+      expect(c.shape).toBe('scissors');
+      expect(c.lowConfidence).toBe(false);
+      expect(c.confidence).toBeGreaterThanOrEqual(LOW_CONFIDENCE_THRESHOLD);
+      // Old formula on the SAME scores would have flagged it low → the repair is real, not a no-op.
+      expect(oldConfidence(c.scores)).toBeLessThan(LOW_CONFIDENCE_THRESHOLD);
+    }
+  });
+
+  it('is a MONOTONIC rescale — new confidence >= old for every fixture (never lowers a throw)', () => {
+    for (const fx of FIXTURES) {
+      const c = classify(extract(fx.window));
+      expect(c.confidence).toBeGreaterThanOrEqual(oldConfidence(c.scores) - 1e-9);
+    }
+  });
+
+  it('preserves scoring intent — argmax (winning shape) unchanged across the whole corpus', () => {
+    // The winner per fixture is determined by score() (untouched by the confidence-denominator
+    // change) and must still equal the labeled shape — the mechanical "scoring intent preserved".
+    for (const fx of FIXTURES) {
+      const c = classify(extract(fx.window));
+      expect(c.shape).toBe(fx.label);
+    }
   });
 });

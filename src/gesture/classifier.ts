@@ -47,8 +47,13 @@ export function classify(f: Features, threshold = LOW_CONFIDENCE_THRESHOLD): Sco
   const [topShape, topScore] = entries[0];
   const runnerUp = entries[1][1];
 
-  const total = topScore + runnerUp + EPS;
-  const confidence = Math.max(0, Math.min(1, (topScore - runnerUp) / total));
+  // card-rps3d-fix [R4, design §5 lever 2] — the old margin (top-runnerUp)/(top+runnerUp+EPS) was
+  // conservative because the denominator summed BOTH scores, compressing genuine throws below the
+  // 0.2 threshold ("Low confidence 17%"). Use a relative-drop-from-the-winner margin
+  // (top-runnerUp)/(top+EPS): strictly >= the old value and a MONOTONIC rescale of the same
+  // (top-runnerUp) gap, so it NEVER reorders shapes (which shape wins is unchanged). Rules and
+  // scoring intent untouched.
+  const confidence = Math.max(0, Math.min(1, (topScore - runnerUp) / (topScore + EPS)));
 
   return {
     shape: topShape,

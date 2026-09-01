@@ -22,6 +22,11 @@ export interface HandRig {
 
 const SHAPES: Shape[] = ['rock', 'paper', 'scissors'];
 
+// card-rps3d-fix (R1, design §2) — hand-plausibility gate. A real hand rig exposes at least this
+// many finger chains; a 2-joint demo skeleton (Khronos RiggedSimple) does NOT clear it. Named so a
+// future real-hand asset validates against it. See GltfHandRig.isHandSkeleton.
+const MIN_FINGER_BONES = 3;
+
 // Case-insensitive name aliases used to match clips / morph targets / (loosely) intent per shape.
 const SHAPE_ALIASES: Record<Shape, string[]> = {
   rock: ['rock', 'fist', 'closed'],
@@ -187,14 +192,29 @@ export class GltfHandRig implements HandRig {
     return bones;
   }
 
+  // card-rps3d-fix (R1, design §2) — reject a non-hand skeleton so the `bones` branch does not
+  // accept ANY rig. findFingerBones (above) still GATHERS candidates loosely (incl. the generic
+  // `bone` token); this gate decides whether those candidates are plausibly a HAND. A skeleton is
+  // hand-plausible only when EITHER a bone is named for an actual finger (the narrowed regex DROPS
+  // the generic `bone` token, so RiggedSimple's `Bone`/`Bone.001` do NOT qualify) OR there are at
+  // least MIN_FINGER_BONES bones (a real hand exposes >=3 finger chains). RiggedSimple's 2 generic
+  // joints clear neither rule -> `bones` rejected -> tryLoad returns null -> PrimitiveHandRig ships.
+  private static isHandSkeleton(bones: THREE.Object3D[]): boolean {
+    const hasFingerName = bones.some((b) => /finger|index|middle|thumb|ring|pinky/.test((b.name || '').toLowerCase()));
+    return hasFingerName || bones.length >= MIN_FINGER_BONES;
+  }
+
   static async tryLoad(url: string, load: GltfLoadFn = defaultLoad): Promise<GltfHandRig | null> {
     try {
       const gltf = await load(url);
       // Capability ladder: clips → morph → bones → null (fall back to primitive).
       if (GltfHandRig.hasNamedClips(gltf)) return new GltfHandRig(gltf, 'clips');
       if (GltfHandRig.findMorphMesh(gltf.scene)) return new GltfHandRig(gltf, 'morph');
-      if (GltfHandRig.findFingerBones(gltf.scene).length > 0) return new GltfHandRig(gltf, 'bones');
-      return null; // rig present but can't distinguish shapes → primitive floor (R5, design §3.4)
+      // card-rps3d-fix (R1): accept `bones` ONLY for a plausibly-hand skeleton. A non-hand rig
+      // (RiggedSimple's 2 generic joints) falls through to null -> PrimitiveHandRig floor.
+      const fb = GltfHandRig.findFingerBones(gltf.scene);
+      if (fb.length > 0 && GltfHandRig.isHandSkeleton(fb)) return new GltfHandRig(gltf, 'bones');
+      return null; // rig present but not a usable hand rig → primitive floor (R5, design §3.4)
     } catch {
       return null; // no/failed asset -> caller falls back to primitive (FORK 3)
     }

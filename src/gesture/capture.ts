@@ -18,9 +18,13 @@ export interface CaptureTuning {
 }
 
 export const DEFAULT_CAPTURE: CaptureTuning = {
-  onsetSpeed: 0.35,
+  // card-rps3d-fix [R4, design §5 lever 1] — a deliberate flick was fragmenting into short/partial
+  // windows (weak features -> low classifier margin -> stuck "Low confidence"). Lower the onset and
+  // lengthen the sub-release hold so one flick is captured as ONE coherent window. Pure capture-side
+  // tuning: no change to score()/rules; strengthens the features the classifier already consumes.
+  onsetSpeed: 0.28,
   releaseSpeed: 0.12,
-  releaseMs: 90,
+  releaseMs: 120,
   maxDurationMs: 1200,
   bufferSize: 256,
 };

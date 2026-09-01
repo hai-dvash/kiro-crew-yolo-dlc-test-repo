@@ -36,6 +36,33 @@ function bareGltf(): LoadedGltf {
   return { scene, animations: [] };
 }
 
+// card-rps3d-fix (R6.1) — a NON-hand skeleton: two generic joints named `Bone`/`Bone.001` with
+// isBone:true (exactly Khronos RiggedSimple's rig). findFingerBones GATHERS them (generic `bone`
+// token / isBone), but they are NOT a plausible hand → the R1 gate must reject → tryLoad null.
+function nonHandBoneGltf(): LoadedGltf {
+  const scene = new THREE.Object3D();
+  for (const name of ['Bone', 'Bone.001']) {
+    const b = new THREE.Object3D();
+    b.name = name;
+    (b as unknown as { isBone: boolean }).isBone = true;
+    scene.add(b);
+  }
+  return { scene, animations: [] };
+}
+
+// card-rps3d-fix (R6.1) — a REAL hand skeleton: five finger-named bones. The gate must ACCEPT
+// (no false negative) → tryLoad resolves a GltfHandRig with poseStrategy 'bones'.
+function fingerNamedGltf(): LoadedGltf {
+  const scene = new THREE.Object3D();
+  for (const name of ['thumb', 'index', 'middle', 'ring', 'pinky']) {
+    const b = new THREE.Object3D();
+    b.name = name;
+    (b as unknown as { isBone: boolean }).isBone = true;
+    scene.add(b);
+  }
+  return { scene, animations: [] };
+}
+
 const loaderFor = (g: LoadedGltf): GltfLoadFn => async () => g;
 
 describe('GltfHandRig.tryLoad capability detection (card-backlog-8, design §3)', () => {
@@ -76,6 +103,30 @@ describe('GltfHandRig.tryLoad capability detection (card-backlog-8, design §3)'
   it('LOW tier always ships the primitive rig (R5)', async () => {
     const rig = await loadHands(QualityTier.Low);
     expect(rig).toBeInstanceOf(PrimitiveHandRig);
+  });
+});
+
+// card-rps3d-fix [R6.1, design §6] — the hand-plausibility gate. RED on 719c6eb (where the `bones`
+// branch accepted ANY skeleton, so RiggedSimple's 2 generic joints shipped as a bending-bar rig);
+// GREEN after T1 (isHandSkeleton rejects a non-hand skeleton → PrimitiveHandRig floor).
+describe('GltfHandRig hand-plausibility gate (card-rps3d-fix, R1/R6.1)', () => {
+  it('rejects a non-hand skeleton (2 generic `Bone` joints = RiggedSimple) → tryLoad null', async () => {
+    // RED on 719c6eb: 2 isBone joints made findFingerBones().length > 0, so a `bones` rig loaded.
+    const rig = await GltfHandRig.tryLoad('x.glb', loaderFor(nonHandBoneGltf()));
+    expect(rig).toBeNull();
+  });
+
+  it('so the shipped rig for that asset is a PrimitiveHandRig, not a GltfHandRig (credit path inert)', async () => {
+    const rig = await GltfHandRig.tryLoad('x.glb', loaderFor(nonHandBoneGltf()));
+    // The loadHands-equivalent outcome: null GLTF → primitive floor. Asserts the CC-BY credit
+    // (gated on `instanceof GltfHandRig`) correctly does NOT render for the rejected asset.
+    expect(rig instanceof GltfHandRig).toBe(false);
+  });
+
+  it('does NOT false-negative a real hand skeleton (5 finger-named bones) → bones rig', async () => {
+    const rig = await GltfHandRig.tryLoad('x.glb', loaderFor(fingerNamedGltf()));
+    expect(rig).not.toBeNull();
+    expect(rig!.poseStrategy).toBe('bones');
   });
 });
 
