@@ -9,13 +9,23 @@
   <body>
     <main id="app" aria-label="3D Rock Paper Scissors">
       <header class="hud">
-        <h1>Rock · Paper · Scissors <small>— maxxed</small></h1>
+        <!-- The ONE semantic level-1 heading; text overwritten from HEADLINE.h1 at boot (copy.ts is the source). -->
+        <h1 id="headline">Rock · Paper · Scissors</h1>
+        <!-- Authoritative live-region lines — LEFT AS-IS and FIRST in reading order (NFR1, R3.1). -->
         <p id="status" role="status" aria-live="polite">Loading…</p>
         <p id="badge" class="badge" role="alert" hidden></p>
+        <!-- Additive comedic sub-lines (filled from copy.ts at boot; sub-lines are paragraphs, never a second heading). -->
+        <p id="headline-certainty" class="headline-sub"></p>
+        <p id="headline-reassurance" class="headline-sub"></p>
       </header>
       <p class="hint">
         Keyboard: press <kbd>R</kbd> / <kbd>P</kbd> / <kbd>S</kbd>, or use the buttons below.
       </p>
+      <!-- Additive, truthful RPS legend (filled from copy.ts at boot). role=note: informative, not a live region. -->
+      <section id="rps-legend" class="rps-legend" role="note" aria-label="How to play Rock Paper Scissors">
+        <p id="rps-legend-title" class="legend-title"></p>
+        <ul id="rps-legend-list" role="list"></ul>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
