@@ -1,41 +1,54 @@
 import { describe, it, expect } from 'vitest';
-import { Round } from '../src/game/round';
-import type { RoundResult } from '../src/game/round';
+import { RoundMachine } from '../src/round/machine';
+import type { GestureResult, Shape } from '../src/types';
 
-describe('Round state machine (R3.1, R3.2, R3.3)', () => {
-  it('drives IDLE→CAPTURING→CLASSIFIED→RESOLVED and returns to IDLE on replay', () => {
-    const states: string[] = [];
-    let result: RoundResult | null = null;
-    // rng=0 → cpuPick = 'rock'
-    const round = new Round(
-      { onState: (s) => states.push(s), onResolved: (r) => (result = r) },
-      () => 0,
-    );
+function gr(shape: Shape, confidence = 0.9, lowConfidence = false): GestureResult {
+  return { shape, confidence, lowConfidence, latencyMs: 12 };
+}
 
-    expect(round.getState()).toBe('IDLE');
-    round.beginCapture();
-    round.classified('paper'); // paper beats rock → win
-    expect(round.getState()).toBe('RESOLVED');
-    expect(result).toEqual({ player: 'paper', cpu: 'rock', outcome: 'win' });
-    expect(states).toEqual(['CAPTURING', 'CLASSIFIED', 'RESOLVED']);
-
-    round.replay();
-    expect(round.getState()).toBe('IDLE');
-    expect(round.getResult()).not.toBeNull(); // last result retained until next round
+describe('RoundMachine (T8, R5.1/R1.2)', () => {
+  it('advances on a confident GestureResult and resolves', () => {
+    const m = new RoundMachine(() => 'scissors'); // player rock beats scissors
+    m.begin();
+    m.submit(gr('rock'));
+    const s = m.getState();
+    expect(s.phase).toBe('resolved');
+    expect(s.result).toBe('a');
+    expect(s.score.player).toBe(1);
   });
 
-  it('fallback path classifies directly from IDLE (NFR3 shares the round path)', () => {
-    const round = new Round({}, () => 0.5); // cpuPick index 1 → 'paper'
-    round.classified('scissors'); // scissors beats paper → win
-    expect(round.getState()).toBe('RESOLVED');
-    expect(round.getResult()?.outcome).toBe('win');
+  it('does NOT resolve on low confidence — flags a re-throw (no silent guess)', () => {
+    const m = new RoundMachine(() => 'rock');
+    m.begin();
+    m.submit(gr('scissors', 0.05, true));
+    const s = m.getState();
+    expect(s.phase).toBe('lowConfidence');
+    expect(s.result).toBeNull();
+    expect(s.score.player + s.score.opponent + s.score.draws).toBe(0);
   });
 
-  it('ignores classification while already RESOLVED until replay', () => {
-    const round = new Round({}, () => 0);
-    round.classified('rock');
-    const first = round.getResult();
-    round.classified('paper'); // ignored — must replay first
-    expect(round.getResult()).toBe(first);
+  it('produces all three outcomes deterministically', () => {
+    const win = new RoundMachine(() => 'scissors');
+    win.begin();
+    win.submit(gr('rock'));
+    expect(win.getState().result).toBe('a');
+
+    const lose = new RoundMachine(() => 'paper');
+    lose.begin();
+    lose.submit(gr('rock'));
+    expect(lose.getState().result).toBe('b');
+
+    const draw = new RoundMachine(() => 'rock');
+    draw.begin();
+    draw.submit(gr('rock'));
+    expect(draw.getState().result).toBe('draw');
+  });
+
+  it('auto-starts a fresh round when submitting after a resolved state', () => {
+    const m = new RoundMachine(() => 'scissors');
+    m.begin();
+    m.submit(gr('rock'));
+    m.submit(gr('rock'));
+    expect(m.getState().score.player).toBe(2);
   });
 });

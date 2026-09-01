@@ -1,9 +1,9 @@
 {
   "name": "rps3d",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "3D Rock-Paper-Scissors with Wii-style mouse-gesture throws (showcase)",
+  "description": "MAXXED-UP 3D Rock-Paper-Scissors — free-flick gesture engine + PBR/HDR/post render + Rapier juice (showcase)",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
@@ -12,6 +12,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "0.13.1",
+    "postprocessing": "6.35.3",
     "three": "0.160.1"
   },
   "devDependencies": {

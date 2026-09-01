@@ -1,55 +1,46 @@
-# 3D Rock-Paper-Scissors — Wii-style mouse-gesture throws
+# rps3d — MAXXED 3D Rock-Paper-Scissors
 
-A zero-install, client-only browser game: **press and hold in the arena, then flick** to throw
-Rock, Paper, or Scissors against the CPU. The gesture is classified from your mouse motion
-(the genuinely hard part); the 3D hands are a lightweight Three.js render.
+A browser showcase: throw rock / paper / scissors with **free-flick mouse gestures**, rendered
+in real 3D. Zero-install, keyboard-accessible, portfolio/tech-demo (no monetization).
 
-Built as a **showcase** (no monetization) per the DLC-YOLO pipeline's viability go/no-go.
+> This is the from-scratch "maxxed" rebuild (branch `feat/rps3d-maxxed`, issue #6) with real 3D
+> libraries — distinct from the shipped minimal card (`card-rps3d`, PR #5).
 
-## Controls
+## Play
+- **Gesture:** flick the mouse — a downward *chop* = rock, a flat *sweep* = paper, a
+  back-and-forth *snip* = scissors. No press-and-hold; motion onset/decay segments the flick.
+- **Keyboard (a11y):** press <kbd>R</kbd> / <kbd>P</kbd> / <kbd>S</kbd> or use the on-screen buttons.
+- **Low confidence?** The game asks you to throw again rather than guessing.
 
-| Gesture | Shape |
-|---|---|
-| Short, sharp **down-flick** | ✊ Rock |
-| Flat **horizontal sweep** | ✋ Paper |
-| Quick **zig-zag** (two reversals) | ✌ Scissors |
-
-Accessibility: three always-visible buttons play the exact same round path (NFR3). A
-low-confidence gesture shows a badge and a one-click re-throw instead of guessing silently.
-
-## Architecture
+## Architecture (the F1-first invariant)
+The **gesture engine (F1)** is the authoritative, ≤100 ms result path: `capture → features →
+classifier → GestureResult`. The round machine advances on that event alone. Render (PBR + HDR
+IBL + bloom/SSAO post), Rapier physics juice, and hand rigs are **cosmetic consumers** that
+subscribe *after* the result is committed — they can never delay or change the outcome.
 
 ```
 src/
-  main.ts              app bootstrap + round loop
-  gesture/
-    capture.ts         pointerdown→move→up sampler (press-and-hold-then-flick window)
-    features.ts        peak velocity, dominant axis, reversals, straightness
-    classify.ts        rule-based classifier → {shape, confidence}
-  render/
-    scene.ts           Three.js scene + two low-poly hand rigs
-    throwAnim.ts        cosmetic 3-2-1-shoot tween (decoupled from result latency)
-  game/
-    rules.ts           pure RPS resolve() + independent cpuPick()
-    round.ts           IDLE→CAPTURING→CLASSIFIED→RESOLVED→replay
-  ui/fallback.ts       a11y buttons + confidence badge
-  dev/overlay.ts       ?dev accuracy overlay (R1.3 spot-check hook)
+  gesture/   capture · features · classifier · engine · harness · fixtures   (F1)
+  round/     machine                                                          (F5)
+  render/    scene (PBR/IBL) · post (bloom/SSAO) · tiers (degrade) · hands    (F2/F3)
+  physics/   world (Rapier fixed-step) · juice                                (F4)
+  a11y/      fallback (keyboard) · motion (reduced-motion/tween)              (F5)
 ```
 
-The classifier is **trainless and rule-based** for v1 (debuggable). A learned classifier and
-free-flick (no-button) capture are parked backlog items.
+## Quality tiers (perf)
+Auto-detected at boot (GPU + FPS probe) and downgraded at runtime before frames drop:
+HIGH (bloom+SSAO+full physics) · MID (bloom, ≥50 fps target) · LOW (tween-only juice, ≥30 fps).
+`prefers-reduced-motion` forces the calm path.
 
 ## Develop
-
 ```bash
 npm install
-npm run dev       # http://127.0.0.1:5173  (append ?dev for the feature overlay)
-npm run build     # tsc typecheck + static Vite bundle in dist/
-npm test          # Vitest unit tests (rules, features, classify, round, accuracy harness)
+npm run dev       # http://127.0.0.1:5173  (append ?dev for the accuracy harness overlay, ?tier=low to force a tier)
+npm test          # vitest — rules, gesture, classifier, harness (≥85%), round machine, tiers, physics
+npm run build     # tsc --noEmit + vite build
 ```
 
-## Requirements traceability
-
-Implements tasks T0–T10 from the DLC-YOLO spec (`requirements.md` / `design.md` / `tasks.md`),
-covering R1 (gesture), R2 (3D render), R3 (rules/replay), R4 (zero-install), NFR1 (lean),
-NFR3 (a11y). NFR2 (no monetization) is honored by omission.
+## Assets / licensing
+Ships procedurally-authored primitive hand rigs (no third-party asset). A licensed rigged GLTF
+can be dropped into `public/assets/hands/hand.glb` behind the same interface — provenance MUST be
+recorded in `public/assets/hands/LICENSE.md` first.

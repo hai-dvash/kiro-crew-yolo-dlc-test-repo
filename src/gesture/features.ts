@@ -1,67 +1,81 @@
-import type { Sample, Features } from '../types';
+// T4 [F1] — kinematic feature extraction (R1.3 feature basis). PURE, DOM-free.
+import type { Sample, Features } from './../types';
 
-/**
- * Derive interpretable features from a raw pointer sample buffer (R1.1).
- * All math is cheap and training-free (v1 is deliberately trainless).
- */
-export function extractFeatures(buf: Sample[]): Features {
-  if (buf.length < 2) {
+const EPS = 1e-6;
+
+/** Extract interpretable kinematic features from a gesture window. */
+export function extract(window: Sample[]): Features {
+  if (window.length < 2) {
     return {
-      peakVelocity: 0,
-      spikeProfile: false,
+      peakSpeed: 0,
+      dominantAxisRatio: 1,
       dominantAxis: 'horizontal',
+      netDisplacement: 0,
       reversals: 0,
-      straightness: 0,
+      durationMs: 0,
+      onsetSharpness: 0,
       pathLength: 0,
     };
   }
 
+  let peakSpeed = 0;
   let pathLength = 0;
-  let peakVelocity = 0;
-  const speeds: number[] = [];
-  let netX = 0;
-  let netY = 0;
+  let prevSpeed = 0;
+  let onsetSharpness = 0;
+  let sumDx = 0;
+  let sumDy = 0;
+  // Reversal tracking along each axis.
+  let prevSignX = 0;
+  let prevSignY = 0;
+  let reversalsX = 0;
+  let reversalsY = 0;
 
-  for (let i = 1; i < buf.length; i++) {
-    const dx = buf[i].x - buf[i - 1].x;
-    const dy = buf[i].y - buf[i - 1].y;
-    const dt = Math.max(1, buf[i].t - buf[i - 1].t); // guard divide-by-zero
+  for (let i = 1; i < window.length; i++) {
+    const a = window[i - 1];
+    const b = window[i];
+    const dt = Math.max(b.t - a.t, EPS);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
     const dist = Math.hypot(dx, dy);
-    const speed = dist / dt;
+    const s = dist / dt;
+
+    peakSpeed = Math.max(peakSpeed, s);
     pathLength += dist;
-    speeds.push(speed);
-    if (speed > peakVelocity) peakVelocity = speed;
-    netX += dx;
-    netY += dy;
+    sumDx += dx;
+    sumDy += dy;
+
+    const jerk = Math.abs(s - prevSpeed) / dt;
+    onsetSharpness = Math.max(onsetSharpness, jerk);
+    prevSpeed = s;
+
+    const sx = Math.sign(dx);
+    const sy = Math.sign(dy);
+    if (sx !== 0) {
+      if (prevSignX !== 0 && sx !== prevSignX) reversalsX++;
+      prevSignX = sx;
+    }
+    if (sy !== 0) {
+      if (prevSignY !== 0 && sy !== prevSignY) reversalsY++;
+      prevSignY = sy;
+    }
   }
 
-  const dominantAxis: Features['dominantAxis'] =
-    Math.abs(netY) >= Math.abs(netX) ? 'vertical' : 'horizontal';
+  const absX = Math.abs(sumDx);
+  const absY = Math.abs(sumDy);
+  const dominantAxis: 'vertical' | 'horizontal' = absY >= absX ? 'vertical' : 'horizontal';
+  const dominantAxisRatio = (Math.max(absX, absY) + EPS) / (Math.min(absX, absY) + EPS);
+  const reversals = dominantAxis === 'vertical' ? reversalsY : reversalsX;
+  const netDisplacement = Math.hypot(sumDx, sumDy);
+  const durationMs = window[window.length - 1].t - window[0].t;
 
-  // Reversals: sign changes of the per-step delta along the dominant axis.
-  const reversals = countReversals(buf, dominantAxis);
-
-  // Spike profile: peak >> mean => a single sharp burst rather than sustained motion.
-  const meanSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length;
-  const spikeProfile = peakVelocity > meanSpeed * 2.2;
-
-  const netDisplacement = Math.hypot(netX, netY);
-  const straightness = pathLength > 0 ? netDisplacement / pathLength : 0;
-
-  return { peakVelocity, spikeProfile, dominantAxis, reversals, straightness, pathLength };
-}
-
-function countReversals(buf: Sample[], axis: 'vertical' | 'horizontal'): number {
-  const pick = (s: Sample) => (axis === 'vertical' ? s.y : s.x);
-  let reversals = 0;
-  let prevSign = 0;
-  const EPS = 1.5; // px — ignore jitter below this per-step delta
-  for (let i = 1; i < buf.length; i++) {
-    const delta = pick(buf[i]) - pick(buf[i - 1]);
-    if (Math.abs(delta) < EPS) continue;
-    const sign = Math.sign(delta);
-    if (prevSign !== 0 && sign !== prevSign) reversals++;
-    prevSign = sign;
-  }
-  return reversals;
+  return {
+    peakSpeed,
+    dominantAxisRatio,
+    dominantAxis,
+    netDisplacement,
+    reversals,
+    durationMs,
+    onsetSharpness,
+    pathLength,
+  };
 }

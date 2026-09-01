@@ -1,0 +1,95 @@
+:root {
+  --bg: #0e1116;
+  --fg: #e6edf3;
+  --accent: #58a6ff;
+  --danger: #ffb454;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+#app { position: relative; height: 100vh; overflow: hidden; }
+
+.stage { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.hud {
+  position: relative;
+  z-index: 2;
+  padding: 1rem 1.25rem;
+  pointer-events: none;
+}
+
+.hud h1 { margin: 0 0 .25rem; font-size: 1.15rem; font-weight: 700; }
+.hud h1 small { color: var(--accent); font-weight: 500; }
+
+#status { margin: .25rem 0; font-size: 1rem; }
+
+.badge {
+  display: inline-block;
+  margin-top: .5rem;
+  padding: .3rem .6rem;
+  border-radius: .4rem;
+  background: var(--danger);
+  color: #1a1200;
+  font-weight: 600;
+}
+
+.hint { position: absolute; bottom: 4.5rem; left: 1.25rem; z-index: 2; opacity: .8; }
+kbd {
+  background: #21262d; border: 1px solid #30363d; border-radius: .3rem;
+  padding: .05rem .35rem; font-family: ui-monospace, monospace;
+}
+
+.a11y-controls {
+  position: absolute;
+  bottom: 1.25rem;
+  left: 1.25rem;
+  z-index: 3;
+  display: flex;
+  gap: .75rem;
+}
+
+.a11y-controls button {
+  min-width: 96px;
+  padding: .6rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg);
+  background: #1c2128;
+  border: 1px solid #30363d;
+  border-radius: .5rem;
+  cursor: pointer;
+}
+
+.a11y-controls button:hover { background: #262c36; }
+.a11y-controls button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dev-overlay {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 4;
+  margin: 0;
+  padding: .6rem .8rem;
+  background: rgba(0, 0, 0, .7);
+  border: 1px solid #30363d;
+  border-radius: .5rem;
+  font-family: ui-monospace, monospace;
+  font-size: .8rem;
+  white-space: pre;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
