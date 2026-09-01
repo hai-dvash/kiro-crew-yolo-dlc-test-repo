@@ -10,7 +10,8 @@ import { RoundMachine, type RoundState } from './round/machine';
 import { createScene } from './render/scene';
 import { createPost } from './render/post';
 import { pickBootTier, TierMonitor } from './render/tiers';
-import { loadHands, GltfHandRig, type HandRig } from './render/hands';
+import { GltfHandRig, type HandRig } from './render/hands';
+import { loadObjects, makeRpsObjectRig } from './render/objects';
 import { computeRigScale } from './render/framing';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
@@ -147,7 +148,7 @@ async function boot(): Promise<void> {
 
   wireGame({
     scene: scene3d as unknown as WireScene,
-    loadHands: () => loadHands(bootTier) as Promise<WireRig>,
+    loadHands: () => loadObjects(bootTier) as Promise<WireRig>,
     engine,
     // wireGame owns the ONE submit sink; construct + mount the a11y fallback against it so both
     // input paths (gesture engine + keyboard/buttons) feed the same machine.submit — single source
@@ -175,6 +176,16 @@ async function boot(): Promise<void> {
     },
   });
 
+  // card-rps3d-objects · f1 (#23) [R2, FORK D3] — NEW opponent-object render path. The opponent was
+  // text-only in render(); now its committed shape renders as its own object entity, distinct from
+  // the player object and set back across the "table". Built by the SAME factory (shared visual
+  // language, R3). It does NOT participate in wireGame's computeRigScale/frameObject (keeps the
+  // single-object framing intact, R4/NFR2). Its meshes start invisible until a shape is set — the
+  // same seam f3's board later hides.
+  const opponent = makeRpsObjectRig();
+  opponent.object.position.set(0, 0, -3);
+  scene3d.scene.add(opponent.object);
+
   // --- The authoritative core: round machine + its ONE input event ---
   let poseT = 0;
 
@@ -182,6 +193,10 @@ async function boot(): Promise<void> {
     render(s);
     if (s.phase === 'resolved' && s.result) {
       poseT = 0;
+      // card-rps3d-objects · f1 (#23) [R2, FORK D4, NFR1] — drive the opponent object off the
+      // ALREADY-COMMITTED opponentShape, inside this committed-result consumer (never at pick time;
+      // pickOpponent() stays solely in RoundMachine.submit()).
+      if (s.opponentShape) opponent.setShape(s.opponentShape, 1);
       const tweenOnly = shouldTweenOnly({
         reducedMotion: reduced,
         tier: monitor.getTier(),
