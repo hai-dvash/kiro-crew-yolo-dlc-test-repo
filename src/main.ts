@@ -3,6 +3,7 @@
 // alone; render + physics/juice subscribe AFTER the machine commits the result.
 import * as THREE from 'three';
 import { parseConfig } from './config';
+import type { GestureResult } from './types';
 import { GestureEngine } from './gesture/engine';
 import { runAccuracy, formatReport } from './gesture/harness';
 import { RoundMachine, type RoundState } from './round/machine';
@@ -10,6 +11,7 @@ import { createScene } from './render/scene';
 import { createPost } from './render/post';
 import { pickBootTier, TierMonitor } from './render/tiers';
 import { loadHands, GltfHandRig, type HandRig } from './render/hands';
+import { computeRigScale } from './render/framing';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
 import { prefersReducedMotion, shouldTweenOnly } from './a11y/motion';
@@ -19,6 +21,92 @@ function detectRendererString(gl: WebGLRenderingContext | null): string {
   if (!gl) return 'unknown';
   const ext = gl.getExtension('WEBGL_debug_renderer_info');
   return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+}
+
+// card-rps3d-fix [R6.4, design §6] — the boot/wiring seam (the META fix). boot() used to be one
+// closure touching document + WebGL, so the load->scene-add, rig scale/frame, and engine/fallback
+// ->machine wiring were UNTESTABLE — which is exactly why the three defects shipped green. wireGame
+// pulls that wiring into a DOM/WebGL-free function whose collaborators are INJECTED, so a headless
+// test can assert (a) the rig is added to the scene, (b) engine.onResult->machine.submit is wired,
+// (c) the fallback feeds the same submit, (d) frameObject is invoked with the rig's measured
+// center/radius on load. boot() below is the thin real-DOM adapter that calls wireGame with real
+// deps — observable runtime behavior is identical.
+
+/** The minimal structural view of a Scene3D wireGame needs (add + frameObject). */
+export interface WireScene {
+  scene: { add(o: unknown): void };
+  frameObject(center: [number, number, number], radius: number): void;
+}
+
+/** A loaded rig's measurable object. Kept loose so a test can supply a stub without THREE/WebGL. */
+export interface WireRig {
+  object: unknown;
+}
+
+/** Emits classified gesture results. */
+export interface WireEngine {
+  onResult(cb: (r: GestureResult) => void): void;
+}
+
+/** Consumes results (the round machine). */
+export interface WireMachine {
+  submit(r: GestureResult): void;
+}
+
+/** Measures a rig object's world AABB (center + bounding radius). Injected so tests avoid THREE. */
+export type MeasureRig = (object: unknown) => { center: [number, number, number]; radius: number };
+
+export interface WireDeps {
+  scene: WireScene;
+  loadHands: () => Promise<WireRig>;
+  engine: WireEngine;
+  /**
+   * Register the a11y fallback against the SAME submit sink as the engine. Receives the shared
+   * submit callback; the impl constructs/mounts the fallback wired to it (single source of truth).
+   */
+  fallbackOnResult: (submit: (r: GestureResult) => void) => void;
+  machine: WireMachine;
+  measureRig: MeasureRig;
+  /** Applied to the rig object once its scale is known (real impl sets object.scale). */
+  applyScale?: (object: unknown, scale: number) => void;
+  /** Called after the rig is loaded + framed (real impl wires the CC-BY credit, etc.). */
+  onRigLoaded?: (rig: WireRig) => void;
+}
+
+/**
+ * Wire the game's load + input paths (behavior-preserving extraction of boot()'s wiring).
+ * Returns the rig-load promise so the caller/tests can await the async load+frame completing.
+ */
+export function wireGame(deps: WireDeps): { loaded: Promise<WireRig> } {
+  // Input paths: the gesture engine AND the a11y fallback both feed the SAME machine.submit.
+  const submit = (r: GestureResult) => deps.machine.submit(r);
+  deps.engine.onResult(submit);
+  deps.fallbackOnResult(submit);
+
+  const loaded = deps.loadHands().then((rig) => {
+    deps.scene.scene.add(rig.object);
+    // Scale the rig to a consistent on-screen size, then fit the camera to its measured AABB.
+    let m = deps.measureRig(rig.object);
+    const scale = computeRigScale(m.radius * 2);
+    deps.applyScale?.(rig.object, scale);
+    m = deps.measureRig(rig.object); // remeasure after scaling
+    deps.scene.frameObject(m.center, m.radius);
+    deps.onRigLoaded?.(rig);
+    return rig;
+  });
+
+  return { loaded };
+}
+
+/** Measure a THREE.Object3D's world AABB → center + bounding-sphere radius (the real MeasureRig). */
+function measureThreeRig(object: unknown): { center: [number, number, number]; radius: number } {
+  const box = new THREE.Box3().setFromObject(object as THREE.Object3D);
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+  const radius = size.length() / 2;
+  return { center: [center.x, center.y, center.z], radius };
 }
 
 async function boot(): Promise<void> {
@@ -50,24 +138,44 @@ async function boot(): Promise<void> {
   const juice = new Juice(scene3d.camera);
 
   // Hands (primitive baseline; GLTF upgrade if a licensed asset is present).
+  // card-rps3d-fix [R6.4] — the load->add->scale->frame + input wiring is delegated to wireGame so
+  // it is testable headlessly; boot() supplies the real deps.
   let hands: HandRig | null = null;
-  loadHands(bootTier).then((h) => {
-    hands = h;
-    scene3d.scene.add(h.object);
-    // CC-BY-4.0 attribution (only when the licensed GLTF is actually in use; provenance in
-    // public/assets/hands/LICENSE.md). Fulfils the CC-BY visible-credit requirement (design Q1).
-    if (h instanceof GltfHandRig) {
-      const credit = document.createElement('div');
-      credit.className = 'asset-credit';
-      credit.innerHTML =
-        'Hand model: <a href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/RiggedSimple" target="_blank" rel="noopener">RiggedSimple</a> ' +
-        '(Khronos glTF-Sample-Assets), <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>';
-      app.appendChild(credit);
-    }
+  const machine = new RoundMachine();
+  const engine = new GestureEngine(cfg.confidenceThreshold);
+  engine.attach(canvas);
+
+  wireGame({
+    scene: scene3d as unknown as WireScene,
+    loadHands: () => loadHands(bootTier) as Promise<WireRig>,
+    engine,
+    // wireGame owns the ONE submit sink; construct + mount the a11y fallback against it so both
+    // input paths (gesture engine + keyboard/buttons) feed the same machine.submit — single source
+    // of truth, and the wiring is asserted by the boot smoke test.
+    fallbackOnResult: (submit) => {
+      const fallback = createFallback(submit);
+      app.appendChild(fallback.element);
+    },
+    machine,
+    measureRig: measureThreeRig,
+    applyScale: (object, scale) => (object as THREE.Object3D).scale.setScalar(scale),
+    onRigLoaded: (rig) => {
+      hands = rig as unknown as HandRig;
+      // CC-BY-4.0 attribution (only when a licensed GLTF is actually in use; provenance in
+      // public/assets/hands/LICENSE.md). With the R1 hand-plausibility gate, RiggedSimple is
+      // rejected and the primitive ships, so this credit correctly does not render.
+      if (hands instanceof GltfHandRig) {
+        const credit = document.createElement('div');
+        credit.className = 'asset-credit';
+        credit.innerHTML =
+          'Hand model: <a href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/RiggedSimple" target="_blank" rel="noopener">RiggedSimple</a> ' +
+          '(Khronos glTF-Sample-Assets), <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>';
+        app.appendChild(credit);
+      }
+    },
   });
 
   // --- The authoritative core: round machine + its ONE input event ---
-  const machine = new RoundMachine();
   let poseT = 0;
 
   machine.onChange((s: RoundState) => {
@@ -99,13 +207,7 @@ async function boot(): Promise<void> {
     }
   }
 
-  // --- Input paths: gesture engine AND a11y fallback both feed the SAME machine ---
-  const engine = new GestureEngine(cfg.confidenceThreshold);
-  engine.attach(canvas);
-  engine.onResult((r) => machine.submit(r));
-
-  const fallback = createFallback((r) => machine.submit(r));
-  app.appendChild(fallback.element);
+  // --- Input paths: gesture engine + a11y fallback are wired to machine.submit by wireGame above ---
 
   machine.begin();
   render(machine.getState());
@@ -146,10 +248,15 @@ async function boot(): Promise<void> {
   }
 }
 
-boot().catch((e) => {
-  // eslint-disable-next-line no-console
-  console.error('boot failed', e);
-});
+// Auto-boot only in a real browser document (guards against importing this module for its exported
+// seam — e.g. the R6.4 boot smoke test — in a non-DOM/test environment). Behavior in the browser is
+// unchanged: #app exists, so boot() runs exactly as before.
+if (typeof document !== 'undefined' && document.getElementById('app')) {
+  boot().catch((e) => {
+    // eslint-disable-next-line no-console
+    console.error('boot failed', e);
+  });
+}
 
 // Keep THREE import referenced for side-effect-free tree-shaking clarity.
 void THREE;

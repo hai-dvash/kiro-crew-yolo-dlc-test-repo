@@ -1,6 +1,7 @@
 // T9 [F2] — three scene + PBR + HDR/IBL (R2.1).
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { computeFraming } from './framing';
 
 export interface Scene3D {
   renderer: THREE.WebGLRenderer;
@@ -8,6 +9,12 @@ export interface Scene3D {
   camera: THREE.PerspectiveCamera;
   render(): void;
   resize(w: number, h: number): void;
+  /**
+   * card-rps3d-fix [R3] — fit the camera to an object's world AABB (center + bounding radius) so it
+   * is framed with a margin at the current aspect. Stores the last framed target and re-applies on
+   * resize. Additive: existing callers unaffected; the hard-coded camera is the pre-load default.
+   */
+  frameObject(center: [number, number, number], radius: number): void;
   dispose(): void;
 }
 
@@ -50,6 +57,35 @@ export function createScene(canvas: HTMLCanvasElement): Scene3D {
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    // card-rps3d-fix [R3] — re-frame the last-framed target for the new aspect (dual-FOV), so a
+    // portrait<->landscape change keeps the rig fully in frame instead of only rescaling the FOV.
+    if (framed) applyFraming(framed.center, framed.radius);
+  }
+
+  // card-rps3d-fix [R3] — camera-fit to a measured AABB. Runs on load + once per resize, NEVER in
+  // the RAF loop (NFR4). Keeps the current view direction; moves the camera to the fit distance.
+  let framed: { center: [number, number, number]; radius: number } | null = null;
+
+  function applyFraming(center: [number, number, number], radius: number): void {
+    const c = new THREE.Vector3(center[0], center[1], center[2]);
+    // Preserve the current view direction (from center toward the camera).
+    const dir = camera.position.clone().sub(c);
+    if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);
+    dir.normalize();
+    const { distance } = computeFraming({
+      fovDeg: camera.fov,
+      aspect: camera.aspect,
+      boundingRadius: radius,
+      center,
+    });
+    camera.position.copy(c).addScaledVector(dir, distance);
+    camera.lookAt(c);
+    camera.updateProjectionMatrix();
+  }
+
+  function frameObject(center: [number, number, number], radius: number): void {
+    framed = { center, radius };
+    applyFraming(center, radius);
   }
 
   return {
@@ -58,6 +94,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene3D {
     camera,
     render: () => renderer.render(scene, camera),
     resize,
+    frameObject,
     dispose: () => {
       envTex.dispose();
       pmrem.dispose();
