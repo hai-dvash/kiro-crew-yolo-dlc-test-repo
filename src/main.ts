@@ -16,6 +16,7 @@ import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
 import { prefersReducedMotion, shouldTweenOnly } from './a11y/motion';
 import { createFallback } from './a11y/fallback';
+import { HEADLINE, RPS_LEGEND } from './hud/copy';
 
 function detectRendererString(gl: WebGLRenderingContext | null): string {
   if (!gl) return 'unknown';
@@ -109,11 +110,53 @@ function measureThreeRig(object: unknown): { center: [number, number, number]; r
   return { center: [center.x, center.y, center.z], radius };
 }
 
+// card-rps3d-headline [issue #19, design §3.2] — static, one-shot HUD chrome injector. Writes the
+// maximal-comedy headline + truthful RPS legend from the single copy source (src/hud/copy.ts) into
+// the additive host elements ONCE at boot. It is deliberately NOT part of render(s): the comedic
+// layer must never write the #status/#badge aria-live region (NFR1 — no live-region spam). Kept as
+// a thin DOM adapter (the asserted logic lives in the pure copy.ts, tested DOM-free) mirroring the
+// wireGame discipline. Missing hosts are tolerated (defensive: never break boot over cosmetic copy).
+export function renderHudChrome(doc: Document): void {
+  const set = (id: string, text: string): void => {
+    const el = doc.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  set('headline', HEADLINE.h1);
+  set('headline-certainty', HEADLINE.certainty);
+  set('headline-reassurance', HEADLINE.reassurance);
+  set('rps-legend-title', HEADLINE.legendTitle);
+
+  const list = doc.getElementById('rps-legend-list');
+  if (list) {
+    list.textContent = ''; // idempotent — clear any prior content before (re)filling
+    for (const row of RPS_LEGEND) {
+      const li = doc.createElement('li');
+      // Decorative emoji: hidden from the accessibility tree so a screen reader hears the mapping
+      // once, cleanly, as text (NFR1).
+      const iconEl = doc.createElement('span');
+      iconEl.className = 'legend-icon';
+      iconEl.setAttribute('aria-hidden', 'true');
+      iconEl.textContent = row.icon;
+      // Mandatory text label carrying the full truthful mapping.
+      const textEl = doc.createElement('span');
+      textEl.className = 'legend-text';
+      textEl.textContent = `${row.gesture} → ${row.label} (key ${row.key})`;
+      li.appendChild(iconEl);
+      li.appendChild(textEl);
+      list.appendChild(li);
+    }
+  }
+}
+
 async function boot(): Promise<void> {
   const cfg = parseConfig();
   const app = document.getElementById('app')!;
   const statusEl = document.getElementById('status')!;
   const badgeEl = document.getElementById('badge')!;
+
+  // card-rps3d-headline [issue #19] — inject the static comedic headline + truthful RPS legend ONCE.
+  // Never inside render(): the comedic layer must not touch the #status/#badge aria-live region (NFR1).
+  renderHudChrome(document);
 
   const canvas = document.createElement('canvas');
   canvas.className = 'stage';
