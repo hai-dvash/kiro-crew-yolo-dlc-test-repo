@@ -9,7 +9,7 @@ import { RoundMachine, type RoundState } from './round/machine';
 import { createScene } from './render/scene';
 import { createPost } from './render/post';
 import { pickBootTier, TierMonitor } from './render/tiers';
-import { loadHands, type HandRig } from './render/hands';
+import { loadHands, GltfHandRig, type HandRig } from './render/hands';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
 import { prefersReducedMotion, shouldTweenOnly } from './a11y/motion';
@@ -54,6 +54,16 @@ async function boot(): Promise<void> {
   loadHands(bootTier).then((h) => {
     hands = h;
     scene3d.scene.add(h.object);
+    // CC-BY-4.0 attribution (only when the licensed GLTF is actually in use; provenance in
+    // public/assets/hands/LICENSE.md). Fulfils the CC-BY visible-credit requirement (design Q1).
+    if (h instanceof GltfHandRig) {
+      const credit = document.createElement('div');
+      credit.className = 'asset-credit';
+      credit.innerHTML =
+        'Hand model: <a href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/RiggedSimple" target="_blank" rel="noopener">RiggedSimple</a> ' +
+        '(Khronos glTF-Sample-Assets), <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>';
+      app.appendChild(credit);
+    }
   });
 
   // --- The authoritative core: round machine + its ONE input event ---
