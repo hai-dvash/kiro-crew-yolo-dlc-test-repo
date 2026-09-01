@@ -1,6 +1,13 @@
 // T12/T13 [F3] — hand rigs (R3.3 primitive baseline + R3.1 GLTF upgrade behind one interface).
 // FORK 3 (design §2): PrimitiveHandRig always ships (zero licensing risk); GltfHandRig is a
 // strict upgrade. Any shipped GLTF MUST record provenance in public/assets/hands/LICENSE.md (NFR5).
+//
+// card-backlog-8 (F3 upgrade): GltfHandRig now closes the setShape stub with a capability-detect
+// pose ladder — clips → morph → bones → null (design §3). Detection runs at load time and picks a
+// `poseStrategy`; setShape dispatches on it so the code is ASSET-SHAPE-AGNOSTIC (works regardless of
+// how the sourced .glb expresses the three poses). If none of the strategies are usable, tryLoad
+// returns null so loadHands falls back to PrimitiveHandRig (R5). Interface + loadHands contract
+// UNCHANGED — strict, non-breaking upgrade.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { Shape } from './../types';
@@ -11,6 +18,23 @@ export interface HandRig {
   /** Pose toward `shape`, interpolated by t in [0,1]. */
   setShape(shape: Shape, t: number): void;
   dispose(): void;
+}
+
+const SHAPES: Shape[] = ['rock', 'paper', 'scissors'];
+
+// Case-insensitive name aliases used to match clips / morph targets / (loosely) intent per shape.
+const SHAPE_ALIASES: Record<Shape, string[]> = {
+  rock: ['rock', 'fist', 'closed'],
+  paper: ['paper', 'open', 'flat', 'hand'],
+  scissors: ['scissors', 'peace', 'victory', 'two'],
+};
+
+function matchShape(name: string): Shape | null {
+  const n = name.toLowerCase();
+  for (const shape of SHAPES) {
+    if (SHAPE_ALIASES[shape].some((a) => n.includes(a))) return shape;
+  }
+  return null;
 }
 
 /**
@@ -68,30 +92,184 @@ export class PrimitiveHandRig implements HandRig {
   }
 }
 
+/** How the loaded rig expresses the three poses. Chosen at load time by capability detection. */
+export type PoseStrategy = 'clips' | 'morph' | 'bones';
+
+/** Minimal structural view of a loaded GLTF — the subset tryLoad/detection needs. Kept loose so a
+ *  headless test can hand-build a synthetic object without a real GLTFLoader / WebGL. */
+export interface LoadedGltf {
+  scene: THREE.Object3D;
+  animations: THREE.AnimationClip[];
+}
+
+/** Injectable loader seam (defaults to the real GLTFLoader). Lets unit tests feed synthetic gltf
+ *  objects to exercise detection + dispatch without a browser GLTF/WebGL pipeline (design §6). */
+export type GltfLoadFn = (url: string) => Promise<LoadedGltf>;
+
+const defaultLoad: GltfLoadFn = async (url) => {
+  const loader = new GLTFLoader();
+  const gltf = await loader.loadAsync(url);
+  return { scene: gltf.scene, animations: gltf.animations };
+};
+
+interface MorphState {
+  mesh: THREE.Mesh;
+  indexForShape: Partial<Record<Shape, number>>;
+}
+
+interface BoneState {
+  bones: THREE.Object3D[];
+  rest: THREE.Euler[];
+}
+
 /** GLTF-backed rig behind the same interface (loaded only if a licensed asset exists). */
 export class GltfHandRig implements HandRig {
   object = new THREE.Group();
-  private mixer: THREE.AnimationMixer | null = null;
+  readonly poseStrategy: PoseStrategy;
 
-  private constructor(gltfScene: THREE.Object3D, mixer: THREE.AnimationMixer | null) {
-    this.object.add(gltfScene);
-    this.mixer = mixer;
+  private mixer: THREE.AnimationMixer | null = null;
+  private actions: Partial<Record<Shape, THREE.AnimationAction>> = {};
+  private activeShape: Shape | null = null;
+  private morph: MorphState | null = null;
+  private bone: BoneState | null = null;
+
+  private constructor(gltf: LoadedGltf, strategy: PoseStrategy) {
+    this.object.add(gltf.scene);
+    this.poseStrategy = strategy;
+
+    if (strategy === 'clips') {
+      this.mixer = new THREE.AnimationMixer(gltf.scene);
+      for (const clip of gltf.animations) {
+        const shape = matchShape(clip.name);
+        if (shape && !this.actions[shape]) this.actions[shape] = this.mixer.clipAction(clip);
+      }
+    } else if (strategy === 'morph') {
+      const mesh = GltfHandRig.findMorphMesh(gltf.scene);
+      if (mesh && mesh.morphTargetDictionary) {
+        const indexForShape: Partial<Record<Shape, number>> = {};
+        for (const [name, idx] of Object.entries(mesh.morphTargetDictionary)) {
+          const shape = matchShape(name);
+          if (shape && indexForShape[shape] === undefined) indexForShape[shape] = idx;
+        }
+        this.morph = { mesh, indexForShape };
+      }
+    } else {
+      // bones
+      const bones = GltfHandRig.findFingerBones(gltf.scene);
+      this.bone = { bones, rest: bones.map((b) => b.rotation.clone()) };
+    }
   }
 
-  static async tryLoad(url: string): Promise<GltfHandRig | null> {
+  // ---- capability detection (design §3) ----
+
+  private static hasNamedClips(gltf: LoadedGltf): boolean {
+    return gltf.animations.some((c) => matchShape(c.name) !== null);
+  }
+
+  private static findMorphMesh(root: THREE.Object3D): THREE.Mesh | null {
+    let found: THREE.Mesh | null = null;
+    root.traverse((o) => {
+      if (found) return;
+      const m = o as THREE.Mesh;
+      const dict = m.morphTargetDictionary;
+      if (dict && Object.keys(dict).some((k) => matchShape(k) !== null)) found = m;
+    });
+    return found;
+  }
+
+  private static findFingerBones(root: THREE.Object3D): THREE.Object3D[] {
+    const bones: THREE.Object3D[] = [];
+    root.traverse((o) => {
+      const n = (o.name || '').toLowerCase();
+      const isBone = (o as unknown as { isBone?: boolean }).isBone === true;
+      if (isBone || /finger|index|middle|thumb|ring|pinky|bone/.test(n)) bones.push(o);
+    });
+    return bones;
+  }
+
+  static async tryLoad(url: string, load: GltfLoadFn = defaultLoad): Promise<GltfHandRig | null> {
     try {
-      const loader = new GLTFLoader();
-      const gltf = await loader.loadAsync(url);
-      const mixer = gltf.animations.length ? new THREE.AnimationMixer(gltf.scene) : null;
-      return new GltfHandRig(gltf.scene, mixer);
+      const gltf = await load(url);
+      // Capability ladder: clips → morph → bones → null (fall back to primitive).
+      if (GltfHandRig.hasNamedClips(gltf)) return new GltfHandRig(gltf, 'clips');
+      if (GltfHandRig.findMorphMesh(gltf.scene)) return new GltfHandRig(gltf, 'morph');
+      if (GltfHandRig.findFingerBones(gltf.scene).length > 0) return new GltfHandRig(gltf, 'bones');
+      return null; // rig present but can't distinguish shapes → primitive floor (R5, design §3.4)
     } catch {
       return null; // no/failed asset -> caller falls back to primitive (FORK 3)
     }
   }
 
-  setShape(_shape: Shape, t: number): void {
-    // Drive morph/skeletal animation toward the shape clip; primitive fallback covers v1.
-    if (this.mixer) this.mixer.update(t * 0.016);
+  // ---- posing dispatch (design §3; closes the old stub) ----
+
+  setShape(shape: Shape, t: number): void {
+    const k = Math.max(0, Math.min(1, t));
+    switch (this.poseStrategy) {
+      case 'clips':
+        this.setShapeClips(shape, k);
+        break;
+      case 'morph':
+        this.setShapeMorph(shape, k);
+        break;
+      case 'bones':
+        this.setShapeBones(shape, k);
+        break;
+    }
+  }
+
+  private setShapeClips(shape: Shape, k: number): void {
+    const action = this.actions[shape];
+    if (!action || !this.mixer) return;
+    if (this.activeShape !== shape) {
+      // Cross-fade from the prior shape's action to this one.
+      for (const s of SHAPES) {
+        const a = this.actions[s];
+        if (a && s !== shape) a.fadeOut(0.15);
+      }
+      action.reset().fadeIn(0.15).play();
+      this.activeShape = shape;
+    }
+    // Drive the clip toward a normalized pose time of k (no per-frame real-time coupling).
+    const clipDuration = action.getClip().duration || 1;
+    action.time = k * clipDuration;
+    this.mixer.update(0);
+  }
+
+  private setShapeMorph(shape: Shape, k: number): void {
+    if (!this.morph) return;
+    const { mesh, indexForShape } = this.morph;
+    const influences = mesh.morphTargetInfluences;
+    if (!influences) return;
+    for (const s of SHAPES) {
+      const idx = indexForShape[s];
+      if (idx === undefined) continue;
+      const targetVal = s === shape ? 1 : 0;
+      influences[idx] += (targetVal - influences[idx]) * k;
+    }
+  }
+
+  private setShapeBones(shape: Shape, k: number): void {
+    if (!this.bone) return;
+    // Map shape → per-bone curl (x-rotation). rock=curled, paper=extended, scissors=two extended.
+    const curl = this.curlFor(shape);
+    const { bones, rest } = this.bone;
+    for (let i = 0; i < bones.length; i++) {
+      const restX = rest[i].x;
+      const targetX = restX + curl[i % curl.length];
+      bones[i].rotation.x += (targetX - bones[i].rotation.x) * k;
+    }
+  }
+
+  private curlFor(shape: Shape): number[] {
+    // Curl in radians; larger = more curled (GLTF analogue of PrimitiveHandRig.extensionFor).
+    switch (shape) {
+      case 'rock':
+        return [1.4, 1.4, 1.4]; // all curled
+      case 'paper':
+        return [0, 0, 0]; // all extended
+      case 'scissors':
+        return [0, 0, 1.4]; // two extended, one curled
+    }
   }
 
   dispose(): void {

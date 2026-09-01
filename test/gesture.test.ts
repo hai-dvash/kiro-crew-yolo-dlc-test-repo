@@ -59,6 +59,16 @@ describe('features.extract — kinematics (T4, R1.3)', () => {
     const f = extract(stream([[26, 4], [-24, -3], [25, 2], [-23, -2]]));
     expect(f.reversals).toBeGreaterThanOrEqual(2);
   });
+
+  it('counts reversals on BOTH axes, not just the dominant one (issue #9)', () => {
+    // Net displacement is vertical-dominant (sum dy >> sum dx) so the OLD code
+    // read reversalsY only; but dy is monotone (single sign -> reversalsY = 0)
+    // while the snip alternation lives on X (dx sign flips every step). The
+    // both-axes sum must capture the X alternation the old logic discarded.
+    const f = extract(stream([[24, 22], [-22, 24], [23, 21], [-21, 23], [22, 20]]));
+    expect(f.dominantAxis).toBe('vertical'); // old code would read reversalsY (= 0 here)
+    expect(f.reversals).toBeGreaterThanOrEqual(3); // sum captures the X reversals
+  });
 });
 
 describe('classifier.classify — margin confidence (T5, R1.2)', () => {
