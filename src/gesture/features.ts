@@ -64,7 +64,12 @@ export function extract(window: Sample[]): Features {
   const absY = Math.abs(sumDy);
   const dominantAxis: 'vertical' | 'horizontal' = absY >= absX ? 'vertical' : 'horizontal';
   const dominantAxisRatio = (Math.max(absX, absY) + EPS) / (Math.min(absX, absY) + EPS);
-  const reversals = dominantAxis === 'vertical' ? reversalsY : reversalsX;
+  // Count reversals on BOTH axes, not just the net-dominant one (issue #9): a
+  // vertical-dominant or diagonal scissors snip alternates on the non-dominant
+  // axis, which axis-gating silently dropped -> under-count -> misclassification.
+  // Safe against regressing horizontal gestures because the classifier consumes
+  // this only via a saturating term (min(reversals/3, 1)).
+  const reversals = reversalsX + reversalsY;
   const netDisplacement = Math.hypot(sumDx, sumDy);
   const durationMs = window[window.length - 1].t - window[0].t;
 

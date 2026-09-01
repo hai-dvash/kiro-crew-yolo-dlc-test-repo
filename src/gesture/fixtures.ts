@@ -47,9 +47,33 @@ function scissors(scale = 1): Sample[] {
   ]);
 }
 
+// scissors (vertical-leaning): net motion leans vertical (dy monotone-down, so the
+// old dominant-axis-only logic read reversalsY = 0 and under-counted), while the
+// snip alternation lives on X (dx sign flips every step -> high reversalsX). Net
+// vertical dominance is kept MODERATE (a real snip, not a pure chop) so the
+// classifier's axis-gated rock term does not swamp scissors; the both-axes sum
+// then reads the X alternation and classifies scissors. (issue #9)
+function scissorsVertical(scale = 1): Sample[] {
+  const s = scale;
+  return build([
+    [28 * s, 9 * s], [-16 * s, 10 * s], [27 * s, 9 * s], [-15 * s, 10 * s], [26 * s, 9 * s], [-14 * s, 10 * s],
+  ]);
+}
+
+// scissors (diagonal): comparable dx/dy magnitude, BOTH axes alternate sign —
+// exercises the summed count across a non-horizontal path. (issue #9)
+function scissorsDiagonal(scale = 1): Sample[] {
+  const s = scale;
+  return build([
+    [20 * s, 18 * s], [-18 * s, -16 * s], [19 * s, 17 * s], [-17 * s, -15 * s], [18 * s, 16 * s], [-16 * s, -14 * s],
+  ]);
+}
+
 /** The committed fixture suite (varied scales for robustness). */
 export const FIXTURES: Fixture[] = [
   ...[0.8, 1, 1.25, 1.5].map((s) => ({ label: 'rock' as Shape, window: rock(s) })),
   ...[0.8, 1, 1.25, 1.5].map((s) => ({ label: 'paper' as Shape, window: paper(s) })),
   ...[0.8, 1, 1.25, 1.5].map((s) => ({ label: 'scissors' as Shape, window: scissors(s) })),
+  ...[0.8, 1, 1.25, 1.5].map((s) => ({ label: 'scissors' as Shape, window: scissorsVertical(s) })),
+  ...[0.8, 1, 1.25, 1.5].map((s) => ({ label: 'scissors' as Shape, window: scissorsDiagonal(s) })),
 ];
