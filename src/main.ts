@@ -2,7 +2,7 @@
 // Enforces the layering invariant: the round-machine advances on GestureResult
 // alone; render + physics/juice subscribe AFTER the machine commits the result.
 import * as THREE from 'three';
-import { parseConfig } from './config';
+import { parseConfig, QualityTier } from './config';
 import type { GestureResult } from './types';
 import { GestureEngine } from './gesture/engine';
 import { runAccuracy, formatReport } from './gesture/harness';
@@ -11,9 +11,9 @@ import { createScene } from './render/scene';
 import { createPost } from './render/post';
 import { pickBootTier, TierMonitor } from './render/tiers';
 import { GltfHandRig, type HandRig } from './render/hands';
-import { loadObjects, makeRpsObjectRig } from './render/objects';
+import { loadObjects, makeRpsObjectRig, objectsApplyFidelity } from './render/objects';
 import { computeRigScale } from './render/framing';
-import { NullOccluder, type OpponentObject } from './render/occluder';
+import { BoardOccluder, type OpponentObject } from './render/occluder';
 import { RevealController } from './render/reveal';
 import { createPhysics, type PhysicsWorld } from './physics/world';
 import { Juice } from './physics/juice';
@@ -166,13 +166,14 @@ async function boot(): Promise<void> {
   canvas.className = 'stage';
   app.prepend(canvas);
 
-  const scene3d = createScene(canvas);
-  const post = createPost(scene3d.renderer, scene3d.scene, scene3d.camera);
+  // Tier selection must resolve BEFORE the scene is built so shadows/maps boot at the right fidelity.
+  // A throwaway context probes the GPU string; createScene then makes the real renderer at that tier.
+  const probeCanvas = document.createElement('canvas');
+  const probeGl = probeCanvas.getContext('webgl') as WebGLRenderingContext | null;
+  const bootTier = cfg.forcedTier ?? pickBootTier(detectRendererString(probeGl), 60);
 
-  // Tier selection (boot detect or forced via ?tier=).
-  const probeGl = scene3d.renderer.getContext();
-  const bootTier =
-    cfg.forcedTier ?? pickBootTier(detectRendererString(probeGl as WebGLRenderingContext), 60);
+  const scene3d = createScene(canvas, bootTier);
+  const post = createPost(scene3d.renderer, scene3d.scene, scene3d.camera);
   post.applyTier(bootTier);
 
   // Physics is optional/async — gameplay never waits on it.
@@ -193,17 +194,38 @@ async function boot(): Promise<void> {
   // Until f1 (#23) lands the real OpponentObject render path, wire a NullOccluder (always-shown,
   // no-op) + a stub opponent — the opponent stays text-only via the unchanged render(s), so f3 is
   // non-regressive. The ONLY f1-gated line is the T7 swap in onRigLoaded below.
-  const opponentStub: OpponentObject = { setVisible: () => {}, setShape: () => {} };
-  const occluder = new NullOccluder();
+  // card-rps3d-objects · f1 (#23) — the opponent object render path. Its committed shape renders as
+  // its own object across the "table". Built by the SAME factory (shared visual language, R3), at the
+  // boot tier so it gets the tier-gated procedural maps (#29 T5). It does NOT participate in wireGame's
+  // computeRigScale/frameObject (keeps single-object framing intact). Meshes start invisible.
+  const opponent = makeRpsObjectRig(bootTier);
+  opponent.object.position.set(0, 0, -3);
+  scene3d.scene.add(opponent.object);
+
+  // f3 [#25] + #29 T7 — hidden-CPU board/reveal sequencing, NOW WIRED to the real objects (f1 landed).
+  // The RevealController is a pure downstream consumer of machine.onChange (like render + juice); it
+  // hides the opponent object behind the BoardOccluder until the reveal beat, then shows the
+  // ALREADY-committed pick (F1-first — never gates the result).
+  const boardOccluder = new BoardOccluder();
+  // Place the panel in front of the opponent object (opponent at z=-3), facing the camera.
+  boardOccluder.object.position.set(0, 0.6, -3 + 0.6);
+  scene3d.scene.add(boardOccluder.object);
+  // Adapter: the reveal controller's OpponentObject view over f1's already-constructed rig (visual-only).
+  const opponentAdapter: OpponentObject = {
+    setVisible: (v) => (opponent.object.visible = v),
+    setShape: (s) => opponent.setShape(s, 1),
+  };
   const reveal = new RevealController({
-    occluder,
-    opponent: opponentStub,
+    occluder: boardOccluder,
+    opponent: opponentAdapter,
     instant: () =>
       shouldTweenOnly({
         reducedMotion: reduced,
         tier: monitor.getTier(),
         physicsReady: !!physics,
       }),
+    // #29 T8 (REQ-C2) — cosmetic camera punch-in on the reveal beat (skipped on instant path).
+    onReveal: () => scene3d.punchIn(),
   });
 
   // Hands (primitive baseline; GLTF upgrade if a licensed asset is present).
@@ -230,11 +252,11 @@ async function boot(): Promise<void> {
     applyScale: (object, scale) => (object as THREE.Object3D).scale.setScalar(scale),
     onRigLoaded: (rig) => {
       hands = rig as unknown as HandRig;
-      // f3 [#25] T7 (f1-gated, SEQUENCED after #23): once f1 lands its OpponentObject render path
-      // + throwable-object rig, swap the NullOccluder + opponentStub above for a BoardOccluder
-      // (positioned in front of the opponent object) + f1's real OpponentObject, passing both into
-      // the RevealController. No logic change to reveal.ts — only this boot-time handle swap. Until
-      // then NullOccluder + stub keep f3 non-regressive (opponent stays text-only via render(s)).
+      // #29 T7 — the f3 reveal path is now WIRED at boot (BoardOccluder + opponent adapter above),
+      // no longer f1-gated: f1's OpponentObject render path + throwable-object rig have landed, so
+      // the RevealController drives the real board+opponent. reveal.ts is unchanged.
+      // [f2] #24 — point the reveal pop at the just-loaded player rig (cosmetic overshoot on reveal).
+      revealPop.setTarget({ setPopScale: (s: number) => (rig.object as THREE.Object3D).scale.setScalar(s) });
       // CC-BY-4.0 attribution (only when a licensed GLTF is actually in use; provenance in
       // public/assets/hands/LICENSE.md). With the R1 hand-plausibility gate, RiggedSimple is
       // rejected and the primitive ships, so this credit correctly does not render.
@@ -248,16 +270,6 @@ async function boot(): Promise<void> {
       }
     },
   });
-
-  // card-rps3d-objects · f1 (#23) [R2, FORK D3] — NEW opponent-object render path. The opponent was
-  // text-only in render(); now its committed shape renders as its own object entity, distinct from
-  // the player object and set back across the "table". Built by the SAME factory (shared visual
-  // language, R3). It does NOT participate in wireGame's computeRigScale/frameObject (keeps the
-  // single-object framing intact, R4/NFR2). Its meshes start invisible until a shape is set — the
-  // same seam f3's board later hides.
-  const opponent = makeRpsObjectRig();
-  opponent.object.position.set(0, 0, -3);
-  scene3d.scene.add(opponent.object);
 
   // --- The authoritative core: round machine + its ONE input event ---
   let poseT = 0;
@@ -309,7 +321,15 @@ async function boot(): Promise<void> {
   render(machine.getState());
 
   // --- Render loop with runtime tier degrade (R2.4) ---
-  const monitor = new TierMonitor(bootTier, (t) => post.applyTier(t));
+  // #29 T9 (NFR-P1/P2) — one fan-out drives ALL tier-gated fidelity together (post + scene shadows +
+  // object procedural maps) so a degrade never leaves one subsystem out of sync.
+  const applyFidelity = (t: QualityTier): void => {
+    post.applyTier(t);
+    scene3d.applyFidelity(t);
+    if (hands) objectsApplyFidelity(hands, t);
+    objectsApplyFidelity(opponent, t);
+  };
+  const monitor = new TierMonitor(bootTier, applyFidelity);
   let last = performance.now();
   function frame(now: number): void {
     const dt = now - last;
@@ -321,6 +341,7 @@ async function boot(): Promise<void> {
     if (physics) physics.step(dt);
     juice.update(dt / 1000);
     reveal.update(dt / 1000); // f3 [#25] — same cosmetic timing channel as juice (seconds d
+    scene3d.updateCamera(dt); // #29 T8 — advance an in-flight reveal camera punch-in (ms delta)
     post.render();
     requestAnimationFrame(frame);
   }

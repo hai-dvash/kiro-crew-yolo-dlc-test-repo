@@ -10,6 +10,11 @@ export interface RevealDeps {
   opponent: OpponentObject;
   /** reduced-motion / LOW-tier signal — reuse shouldTweenOnly({reducedMotion,tier,physicsReady}). */
   instant: () => boolean;
+  /**
+   * #29 T8 (REQ-C2) — optional cosmetic camera punch-in trigger, fired on the reveal beat only when
+   * NOT instant (reduced-motion / LOW skip it). Visual-only; never reads or gates committed state.
+   */
+  onReveal?: () => void;
 }
 
 /**
@@ -34,7 +39,10 @@ export class RevealController {
     if (s.phase === 'resolved' && s.result && s.opponentShape && !this.revealedThisRound) {
       // F1-FIRST: opponentShape/result are ALREADY set by submit(); we only display + choreograph.
       this.deps.opponent.setShape(s.opponentShape);
-      this.deps.occluder.reveal(this.deps.instant()); // R2/R3; instant path = NFR3 reduced-motion
+      const instant = this.deps.instant();
+      this.deps.occluder.reveal(instant); // R2/R3; instant path = NFR3 reduced-motion
+      // #29 T8 — cosmetic camera punch-in on the reveal beat; skipped on instant (reduced-motion/LOW).
+      if (!instant) this.deps.onReveal?.();
       this.revealedThisRound = true;
     }
     // 'lowConfidence': intentionally no-op (stay covered).

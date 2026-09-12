@@ -5,6 +5,7 @@
 // state, never gates the committed result.
 import * as THREE from 'three';
 import type { Shape } from '../types';
+import { PALETTE } from './config';
 
 /** The opponent's rendered object, as the reveal controller sees it (f1/#23 supplies the real one). */
 export interface OpponentObject {
@@ -68,20 +69,31 @@ const REVEAL_MS = 320;
 export class BoardOccluder implements Occluder {
   readonly object: THREE.Object3D;
   private readonly material: THREE.MeshStandardMaterial;
+  private readonly edgeMaterial: THREE.LineBasicMaterial;
   private elapsed = 0;
   private animating = false;
   private _revealed = false;
 
   constructor(width = 2.4, height = 2.4) {
     this.material = new THREE.MeshStandardMaterial({
-      color: 0x1a1a24,
+      color: PALETTE.ground,
+      emissive: new THREE.Color(PALETTE.accent),
+      emissiveIntensity: 0.12,
       transparent: true,
       opacity: 1,
-      roughness: 0.9,
-      metalness: 0.0,
+      roughness: 0.85,
+      metalness: 0.05,
     });
     const geo = new THREE.PlaneGeometry(width, height);
-    this.object = new THREE.Mesh(geo, this.material);
+    const panel = new THREE.Mesh(geo, this.material);
+    // accent-edged frame (visual-only art direction, REQ-C1) — shares the panel's fade via opacity.
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({ color: PALETTE.accent, transparent: true, opacity: 1 }),
+    );
+    panel.add(edge);
+    this.edgeMaterial = edge.material as THREE.LineBasicMaterial;
+    this.object = panel;
     this.object.visible = true;
   }
 
@@ -90,6 +102,7 @@ export class BoardOccluder implements Occluder {
     this.animating = false;
     this.elapsed = 0;
     this.material.opacity = 1;
+    this.edgeMaterial.opacity = 1;
     this.object.visible = true;
   }
 
@@ -98,6 +111,7 @@ export class BoardOccluder implements Occluder {
       this.animating = false;
       this.elapsed = REVEAL_MS;
       this.material.opacity = 0;
+      this.edgeMaterial.opacity = 0;
       this.object.visible = false;
       this._revealed = true;
       return;
@@ -105,6 +119,7 @@ export class BoardOccluder implements Occluder {
     this.animating = true;
     this.elapsed = 0;
     this.material.opacity = 1;
+    this.edgeMaterial.opacity = 1;
     this.object.visible = true;
   }
 
@@ -114,6 +129,7 @@ export class BoardOccluder implements Occluder {
     this.elapsed += dt * 1000;
     const k = Math.min(1, this.elapsed / REVEAL_MS);
     this.material.opacity = 1 - k;
+    this.edgeMaterial.opacity = 1 - k;
     if (k >= 1) {
       this.animating = false;
       this.object.visible = false;

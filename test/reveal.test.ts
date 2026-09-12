@@ -94,4 +94,49 @@ describe('reveal controller (f3, NFR5)', () => {
     m.submit(R()); // resolved -> submit() re-enters via begin(): capturing -> cover
     expect(f.calls.filter((c) => c === 'cover').length).toBeGreaterThanOrEqual(2);
   });
+
+  // #29 T11 / VER-4 / AC-C3 / NFR-I1 — F1-FIRST static guard: the reveal + occluder + camera
+  // punch-in path is a read-only committed-result CONSUMER. Given a fixed committed round, the
+  // committed result/opponentShape must be IDENTICAL whether or not the RevealController (with its
+  // occluder + onReveal punch-in) is wired. If a future edit coupled reveal timing back into round
+  // state, this equality breaks.
+  it('reveal/occluder/punch-in never mutates committed round state (F1-first)', () => {
+    const detPick = () => 'rock' as const;
+
+    // Baseline: NO reveal controller wired.
+    const bare = new RoundMachine(detPick);
+    bare.begin();
+    bare.submit(R());
+    const bareState = bare.getState();
+
+    // With the full reveal path wired (occluder + opponent adapter + onReveal punch-in).
+    const withReveal = new RoundMachine(detPick);
+    let punchCalls = 0;
+    const opponentShapes: string[] = [];
+    const ctrl = new RevealController({
+      occluder: {
+        cover: () => {},
+        reveal: () => {},
+        update: () => {},
+        isRevealed: () => true,
+      },
+      opponent: { setVisible: () => {}, setShape: (s) => opponentShapes.push(s) },
+      instant: () => false,
+      onReveal: () => punchCalls++,
+    });
+    withReveal.onChange((s) => ctrl.onState(s));
+    withReveal.begin();
+    withReveal.submit(R());
+    const revealState = withReveal.getState();
+
+    // The committed result + opponent pick are invariant to the reveal path being present.
+    expect(revealState.result).toBe(bareState.result);
+    expect(revealState.opponentShape).toBe(bareState.opponentShape);
+    expect(revealState.playerShape).toBe(bareState.playerShape);
+    // The reveal path only DISPLAYED the already-committed shape + fired the cosmetic punch-in.
+    expect(opponentShapes).toEqual([revealState.opponentShape]);
+    expect(punchCalls).toBe(1);
+    // RevealController exposes no submit/machine surface (structural render-only entity).
+    expect((ctrl as unknown as { submit?: unknown }).submit).toBeUndefined();
+  });
 });

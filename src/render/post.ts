@@ -10,6 +10,7 @@ import {
   BlendFunction,
 } from 'postprocessing';
 import { QualityTier } from './../config';
+import { POST_TUNE } from './config';
 
 export interface PostPipeline {
   composer: EffectComposer;
@@ -29,12 +30,16 @@ export function createPost(
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
 
-  const bloom = new BloomEffect({ intensity: 0.9, luminanceThreshold: 0.6, mipmapBlur: true });
+  const bloom = new BloomEffect({
+    intensity: POST_TUNE.bloom.intensity,
+    luminanceThreshold: POST_TUNE.bloom.luminanceThreshold,
+    mipmapBlur: true,
+  });
   const ssao = new SSAOEffect(camera, undefined as unknown as THREE.Texture, {
     blendFunction: BlendFunction.MULTIPLY,
     samples: 16,
-    radius: 0.1,
-    intensity: 1.2,
+    radius: POST_TUNE.ssao.radius,
+    intensity: POST_TUNE.ssao.intensity,
   });
 
   bloom.blendMode.opacity.value = 1;
