@@ -10,7 +10,7 @@ import { RoundMachine, type RoundState } from './round/machine';
 import { createScene } from './render/scene';
 import { createPost } from './render/post';
 import { pickBootTier, TierMonitor } from './render/tiers';
-import { GltfHandRig, type HandRig } from './render/hands';
+import type { HandRig } from './render/objects';
 import { loadObjects, makeRpsObjectRig } from './render/objects';
 import { computeRigScale } from './render/framing';
 import { NullOccluder, type OpponentObject } from './render/occluder';
@@ -235,17 +235,8 @@ async function boot(): Promise<void> {
       // (positioned in front of the opponent object) + f1's real OpponentObject, passing both into
       // the RevealController. No logic change to reveal.ts — only this boot-time handle swap. Until
       // then NullOccluder + stub keep f3 non-regressive (opponent stays text-only via render(s)).
-      // CC-BY-4.0 attribution (only when a licensed GLTF is actually in use; provenance in
-      // public/assets/hands/LICENSE.md). With the R1 hand-plausibility gate, RiggedSimple is
-      // rejected and the primitive ships, so this credit correctly does not render.
-      if (hands instanceof GltfHandRig) {
-        const credit = document.createElement('div');
-        credit.className = 'asset-credit';
-        credit.innerHTML =
-          'Hand model: <a href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/RiggedSimple" target="_blank" rel="noopener">RiggedSimple</a> ' +
-          '(Khronos glTF-Sample-Assets), <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>';
-        app.appendChild(credit);
-      }
+      // FR-2 (card-rps3d-fixgame): the GltfHandRig / CC-BY-4.0 credit branch has been removed.
+      // The shipped player is always RpsObjectRig; the GltfHandRig path was inert dead code.
     },
   });
 
