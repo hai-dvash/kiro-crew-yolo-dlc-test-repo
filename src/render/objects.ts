@@ -17,7 +17,15 @@
 import * as THREE from 'three';
 import type { Shape } from '../types';
 import { QualityTier } from '../config';
-import type { HandRig } from './hands'; // reuse the SAME interface (object/setShape/dispose)
+// FR-2 (card-rps3d-fixgame): HandRig interface formerly lived in ./hands (now removed — that
+// module and its GltfHandRig/loadHands dead-code path were inert relative to the shipped player).
+// Declared here as the natural home of the RpsObjectRig that implements it.
+export interface HandRig {
+  object: import('three').Object3D;
+  /** Pose toward `shape`, interpolated by t in [0,1]. */
+  setShape(shape: import('../types').Shape, t: number): void;
+  dispose(): void;
+}
 
 const SHAPES: Shape[] = ['rock', 'paper', 'scissors'];
 
